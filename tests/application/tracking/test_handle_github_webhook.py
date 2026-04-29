@@ -362,6 +362,39 @@ class TestHandleGitHubWebhook:
         assert len(reactions.added) == 1
         assert reactions.added[0][1] == "git-approved"
 
+    async def test_webhook_self_review_muted_for_third_party_sender(
+        self,
+        reactions: FakeReactions,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        # Author Bob commented earlier; mute_self_reviews is enabled.
+        # A synchronize webhook fires with a different sender (Alice).
+        # The author's COMMENTED review must not drive a `speech_balloon`
+        # reaction just because the existing sender==author short-circuit
+        # doesn't trigger.
+        scope_keys = ("slack/T1/C123", "slack/T1", "slack")
+        repo.stored.append(
+            TrackedPR(pr_url=_pr_url(), message_ref=_msg_ref(), scope_keys=scope_keys)
+        )
+        await scope_settings.set("slack/T1", "mute_self_reviews", True)
+        info = PRInfo(
+            state="open",
+            merged=False,
+            reviews=(Review(user_login="bob", state=ReviewState.COMMENTED),),
+            author_login="bob",
+        )
+        source = FakePRSource(info)
+        use_case = HandleGitHubWebhook(
+            source, reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute("o", "r", 1, sender="alice")
+
+        assert len(reactions.added) == 0
+
     async def test_webhook_no_reaction_when_only_excluded_reviewer(
         self,
         reactions: FakeReactions,

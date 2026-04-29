@@ -1,6 +1,33 @@
 from prbot.domain.tracking.value_objects import PRInfo, PRStatus, ReviewState
 
 
+def filter_pr_info(
+    pr_info: PRInfo,
+    *,
+    excluded_logins: set[str] | None = None,
+    mute_self_review_comments: bool = False,
+) -> PRInfo:
+    """Drop reviews that should not influence status resolution for a scope.
+
+    - ``excluded_logins``: lowercased set of logins to ignore entirely.
+    - ``mute_self_review_comments``: if True, COMMENTED reviews authored by the
+      PR author are dropped (mirrors the per-scope ``mute_self_reviews`` flag).
+    """
+    reviews = pr_info.reviews
+    if mute_self_review_comments and pr_info.author_login:
+        author = pr_info.author_login.lower()
+        reviews = tuple(
+            r
+            for r in reviews
+            if not (r.user_login.lower() == author and r.state == ReviewState.COMMENTED)
+        )
+    if excluded_logins:
+        reviews = tuple(r for r in reviews if r.user_login.lower() not in excluded_logins)
+    if reviews is pr_info.reviews:
+        return pr_info
+    return pr_info.model_copy(update={"reviews": reviews})
+
+
 def resolve_pr_status(pr_info: PRInfo) -> PRStatus:
     """Determine the PR status based on state and reviews.
 

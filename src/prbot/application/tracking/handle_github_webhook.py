@@ -6,8 +6,8 @@ from prbot.domain.emoji.ports import EmojiConfigResolverPort
 from prbot.domain.emoji.value_objects import EmojiConfig
 from prbot.domain.exclusions.ports import UserExclusionPort
 from prbot.domain.tracking.ports import PRRepositoryPort, PRSourcePort, ReactionPort
-from prbot.domain.tracking.status_resolver import resolve_pr_status
-from prbot.domain.tracking.value_objects import PRInfo, PRStatus, PRUrl
+from prbot.domain.tracking.status_resolver import filter_pr_info, resolve_pr_status
+from prbot.domain.tracking.value_objects import PRStatus, PRUrl
 
 logger = logging.getLogger(__name__)
 
@@ -71,27 +71,15 @@ class HandleGitHubWebhook:
             cache_key = tracked.scope_keys
             if cache_key not in status_cache:
                 excluded_logins = await self._user_exclusions.excluded_logins(list(cache_key))
+                mute = bool(await self._scope_settings.get(list(cache_key), MUTE_SELF_REVIEWS_KEY))
                 status_cache[cache_key] = resolve_pr_status(
-                    _filter_reviews(pr_info, excluded_logins)
+                    filter_pr_info(
+                        pr_info,
+                        excluded_logins=excluded_logins,
+                        mute_self_review_comments=mute,
+                    )
                 )
             status = status_cache[cache_key]
-
-            if (
-                status == PRStatus.COMMENTED
-                and sender
-                and pr_info.author_login
-                and sender == pr_info.author_login
-            ):
-                muted = await self._scope_settings.get(
-                    list(tracked.scope_keys), MUTE_SELF_REVIEWS_KEY
-                )
-                if muted:
-                    logger.info(
-                        "Skipping self-review comment on %s for %s — mute flag set",
-                        pr_url,
-                        tracked.message_ref,
-                    )
-                    continue
 
             if cache_key not in config_cache:
                 config_cache[cache_key] = await self._emoji_resolver.resolve(
@@ -105,12 +93,3 @@ class HandleGitHubWebhook:
 
             await self._reactions.add_reaction(tracked.message_ref, emoji, fallback)
             await self._repo.add_emoji(pr_url, tracked.message_ref, emoji)
-
-
-def _filter_reviews(pr_info: PRInfo, excluded_logins: set[str]) -> PRInfo:
-    if not excluded_logins:
-        return pr_info
-    kept = tuple(r for r in pr_info.reviews if r.user_login.lower() not in excluded_logins)
-    if len(kept) == len(pr_info.reviews):
-        return pr_info
-    return pr_info.model_copy(update={"reviews": kept})

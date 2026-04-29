@@ -72,6 +72,7 @@ handle_incoming_message = HandleIncomingMessage(
     pr_repository=pr_repository,
     emoji_resolver=emoji_resolver,
     user_exclusions=user_exclusion_repo,
+    scope_settings=scope_settings_repo,
 )
 handle_github_webhook = HandleGitHubWebhook(
     source=github_gateway,

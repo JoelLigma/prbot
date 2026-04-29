@@ -8,6 +8,7 @@ from tests.conftest import (
     FakePRRepository,
     FakePRSource,
     FakeReactions,
+    FakeScopeSettingsRepo,
     FakeUserExclusionRepo,
 )
 
@@ -45,15 +46,22 @@ class TestHandleIncomingMessage:
     def exclusions(self) -> FakeUserExclusionRepo:
         return FakeUserExclusionRepo()
 
+    @pytest.fixture
+    def scope_settings(self) -> FakeScopeSettingsRepo:
+        return FakeScopeSettingsRepo()
+
     async def test_open_pr_gets_no_reaction(
         self,
         reactions: FakeReactions,
         repo: FakePRRepository,
         resolver: FakeEmojiConfigResolver,
         exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
     ) -> None:
         source = FakePRSource(_open_pr())
-        use_case = HandleIncomingMessage([source], reactions, repo, resolver, exclusions)
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
 
         await use_case.execute(_msg_ref(), "Check https://github.com/o/r/pull/1")
 
@@ -67,9 +75,12 @@ class TestHandleIncomingMessage:
         repo: FakePRRepository,
         resolver: FakeEmojiConfigResolver,
         exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
     ) -> None:
         source = FakePRSource(_open_pr())
-        use_case = HandleIncomingMessage([source], reactions, repo, resolver, exclusions)
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
 
         await use_case.execute(_msg_ref(), "Just a normal message")
 
@@ -82,9 +93,12 @@ class TestHandleIncomingMessage:
         repo: FakePRRepository,
         resolver: FakeEmojiConfigResolver,
         exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
     ) -> None:
         source = FakePRSource(_approved_pr())
-        use_case = HandleIncomingMessage([source], reactions, repo, resolver, exclusions)
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
 
         text = "See github.com/o/r/pull/1 and github.com/o/r/pull/2"
         await use_case.execute(_msg_ref(), text)
@@ -98,9 +112,12 @@ class TestHandleIncomingMessage:
         repo: FakePRRepository,
         resolver: FakeEmojiConfigResolver,
         exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
     ) -> None:
         source = FakePRSource(_approved_pr())
-        use_case = HandleIncomingMessage([source], reactions, repo, resolver, exclusions)
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
 
         text = "github.com/o/r/pull/1 and github.com/o/r/pull/1 again"
         await use_case.execute(_msg_ref(), text)
@@ -113,9 +130,12 @@ class TestHandleIncomingMessage:
         repo: FakePRRepository,
         resolver: FakeEmojiConfigResolver,
         exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
     ) -> None:
         source = FakePRSource(_approved_pr())
-        use_case = HandleIncomingMessage([source], reactions, repo, resolver, exclusions)
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
 
         await use_case.execute(_msg_ref(), "github.com/o/r/pull/1")
 
@@ -127,9 +147,12 @@ class TestHandleIncomingMessage:
         repo: FakePRRepository,
         resolver: FakeEmojiConfigResolver,
         exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
     ) -> None:
         source = FakePRSource(_approved_pr())
-        use_case = HandleIncomingMessage([source], reactions, repo, resolver, exclusions)
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
 
         await use_case.execute(_msg_ref(), "github.com/o/r/pull/1")
 
@@ -143,9 +166,12 @@ class TestHandleIncomingMessage:
         repo: FakePRRepository,
         resolver: FakeEmojiConfigResolver,
         exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
     ) -> None:
         source = FakePRSource(_approved_pr())
-        use_case = HandleIncomingMessage([source], reactions, repo, resolver, exclusions)
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
 
         await use_case.execute(_msg_ref(), "github.com/o/r/pull/1")
 
@@ -162,10 +188,13 @@ class TestHandleIncomingMessage:
         reactions: FakeReactions,
         repo: FakePRRepository,
         exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
     ) -> None:
         source = FakePRSource(_approved_pr())
         custom_resolver = FakeEmojiConfigResolver(EmojiConfig(approved="shipit"))
-        use_case = HandleIncomingMessage([source], reactions, repo, custom_resolver, exclusions)
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, custom_resolver, exclusions, scope_settings
+        )
 
         await use_case.execute(_msg_ref(), "github.com/o/r/pull/1")
 
@@ -177,6 +206,7 @@ class TestHandleIncomingMessage:
         repo: FakePRRepository,
         resolver: FakeEmojiConfigResolver,
         exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
     ) -> None:
         # Repro: a PR has a comment review from cursor[bot]; if cursor[bot]
         # is workspace-excluded, pasting the URL into a channel that inherits
@@ -188,7 +218,9 @@ class TestHandleIncomingMessage:
         )
         source = FakePRSource(pr_with_cursor_comment)
         await exclusions.add("slack/T1", "cursor[bot]")
-        use_case = HandleIncomingMessage([source], reactions, repo, resolver, exclusions)
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
 
         await use_case.execute(
             _msg_ref(),
@@ -198,3 +230,68 @@ class TestHandleIncomingMessage:
 
         assert len(reactions.added) == 0
         assert repo.stored[0].applied_emojis == frozenset()
+
+    async def test_self_review_comment_muted_on_initial_tracking(
+        self,
+        reactions: FakeReactions,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        # Author commented on their own PR. mute_self_reviews is enabled at
+        # the workspace scope. Pasting the URL into a channel that inherits
+        # the mute must not produce a `commented` reaction.
+        pr_with_self_comment = PRInfo(
+            state="open",
+            merged=False,
+            reviews=(Review(user_login="bob", state=ReviewState.COMMENTED),),
+            author_login="bob",
+        )
+        source = FakePRSource(pr_with_self_comment)
+        await scope_settings.set("slack/T1", "mute_self_reviews", True)
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute(
+            _msg_ref(),
+            "github.com/o/r/pull/1",
+            scope_keys=["slack/T1/C123", "slack/T1", "slack"],
+        )
+
+        assert len(reactions.added) == 0
+        assert repo.stored[0].applied_emojis == frozenset()
+
+    async def test_self_review_mute_does_not_hide_other_reviewer_comment(
+        self,
+        reactions: FakeReactions,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        # Mute should drop only the author's COMMENTED reviews — a comment
+        # from someone else should still drive the status.
+        pr = PRInfo(
+            state="open",
+            merged=False,
+            reviews=(
+                Review(user_login="bob", state=ReviewState.COMMENTED),
+                Review(user_login="alice", state=ReviewState.COMMENTED),
+            ),
+            author_login="bob",
+        )
+        source = FakePRSource(pr)
+        await scope_settings.set("slack/T1", "mute_self_reviews", True)
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute(
+            _msg_ref(),
+            "github.com/o/r/pull/1",
+            scope_keys=["slack/T1/C123", "slack/T1", "slack"],
+        )
+
+        assert reactions.added[0][1] == "speech_balloon"
