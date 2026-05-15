@@ -116,14 +116,12 @@ class SlackIntegration:
         if parsed.advance_cursor:
             await self._cursor_repo.upsert_cursor(INTEGRATION_ID, parsed.channel, parsed.ts)
 
-        logger.info("Slack message in %s: %s", parsed.channel, parsed.text[:100])
-
         if not PR_URL_REGEX.search(parsed.text):
             return
 
         message_ref = encode_ref(parsed.channel, parsed.ts)
         scope_keys = build_scope_keys(team=parsed.team, channel=parsed.channel)
-        logger.info("Found PR URL in message, processing %s", message_ref.ref)
+        logger.debug("Found PR URL in Slack message, processing %s", message_ref.ref)
         await self._handle_incoming_message.execute(
             message_ref=message_ref, text=parsed.text, scope_keys=scope_keys
         )
