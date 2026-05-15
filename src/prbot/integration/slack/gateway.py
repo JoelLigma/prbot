@@ -101,7 +101,7 @@ class SlackGateway:
         if await self._try_react(channel, timestamp, emoji):
             return
         if fallback_emoji and await self._try_react(channel, timestamp, fallback_emoji):
-            logger.info(
+            logger.debug(
                 "Used fallback emoji %r for %s:%s (primary %r unavailable)",
                 fallback_emoji,
                 channel,
