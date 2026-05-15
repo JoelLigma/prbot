@@ -1,8 +1,8 @@
 import logging
 from dataclasses import dataclass
-from typing import cast
 
 from fastapi import FastAPI, Request
+from pydantic import ValidationError
 from slack_bolt.adapter.fastapi.async_handler import AsyncSlackRequestHandler
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.context.ack.async_ack import AsyncAck
@@ -18,6 +18,7 @@ from prbot.application.tracking.backfill_missed_messages import (
 from prbot.application.tracking.handle_incoming_message import HandleIncomingMessage
 from prbot.config import SlackConfig
 from prbot.domain.tracking.ports import ChannelCursorPort, ReactionPort
+from prbot.integration.slack.event_models import SlackMessageEvent
 from prbot.integration.slack.gateway import (
     INTEGRATION_ID,
     PR_URL_REGEX,
@@ -44,34 +45,36 @@ def parse_message_event(event: dict[str, object]) -> ParsedMessageEvent | None:
     Handles both initial ``message`` events and ``message_changed`` subtypes —
     the latter carry the (possibly unfurled) content under ``event["message"]``
     and should not advance the channel cursor, since the original ``message``
-    event already did. Returns ``None`` if the event has no usable channel/ts.
+    event already did. Returns ``None`` if the payload is malformed or lacks a
+    usable channel/ts.
     """
-    channel = str(event.get("channel", ""))
-    subtype = event.get("subtype")
+    try:
+        evt = SlackMessageEvent.model_validate(event)
+    except ValidationError:
+        logger.warning("Could not parse Slack message event", exc_info=True)
+        return None
 
-    if subtype == "message_changed":
-        raw_message = event.get("message")
-        if not isinstance(raw_message, dict):
+    if evt.subtype == "message_changed":
+        if evt.message is None:
             return None
-        message = cast(dict[str, object], raw_message)
-        text = str(message.get("text", ""))
-        ts = str(message.get("ts", ""))
-        team = str(message.get("team", "") or event.get("team", ""))
-        attachment_text = flatten_attachment_text(message.get("attachments"))
+        text = evt.message.text
+        ts = evt.message.ts
+        team = evt.message.team or evt.team
+        attachment_text = flatten_attachment_text(evt.message.attachments)
         if attachment_text:
             text = f"{text}\n{attachment_text}" if text else attachment_text
         advance_cursor = False
     else:
-        text = str(event.get("text", ""))
-        ts = str(event.get("ts", ""))
-        team = str(event.get("team", ""))
+        text = evt.text
+        ts = evt.ts
+        team = evt.team
         advance_cursor = True
 
-    if not channel or not ts:
+    if not evt.channel or not ts:
         return None
 
     return ParsedMessageEvent(
-        channel=channel, ts=ts, text=text, team=team, advance_cursor=advance_cursor
+        channel=evt.channel, ts=ts, text=text, team=team, advance_cursor=advance_cursor
     )
 
 
