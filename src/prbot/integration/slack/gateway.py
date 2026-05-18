@@ -1,10 +1,8 @@
 import logging
-import re
 import time
 import unicodedata
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import cast
 
 from slack_sdk.web.async_client import AsyncWebClient
 
@@ -14,31 +12,6 @@ from prbot.domain.tracking.value_objects import MessageRef
 logger = logging.getLogger(__name__)
 
 INTEGRATION_ID = "slack"
-
-PR_URL_REGEX = re.compile(r"github\.com/[^/\s]+/[^/\s]+/pull/\d+")
-
-
-def flatten_attachment_text(attachments: object) -> str:
-    """Concatenate scannable string fields from Slack message attachments.
-
-    Skips attachments whose ``from_url`` is itself a GitHub PR URL — the URL
-    is already in the message body, so scanning the unfurl would just produce
-    a redundant ``fetch_pr_info`` call.
-    """
-    if not isinstance(attachments, list):
-        return ""
-    parts: list[str] = []
-    for raw_att in attachments:
-        if not isinstance(raw_att, dict):
-            continue
-        att = cast(dict[str, object], raw_att)
-        from_url = att.get("from_url")
-        if isinstance(from_url, str) and PR_URL_REGEX.search(from_url):
-            continue
-        for value in att.values():
-            if isinstance(value, str):
-                parts.append(value)
-    return "\n".join(parts)
 
 
 def encode_ref(channel: str, ts: str) -> MessageRef:
@@ -101,7 +74,7 @@ class SlackGateway:
         if await self._try_react(channel, timestamp, emoji):
             return
         if fallback_emoji and await self._try_react(channel, timestamp, fallback_emoji):
-            logger.debug(
+            logger.info(
                 "Used fallback emoji %r for %s:%s (primary %r unavailable)",
                 fallback_emoji,
                 channel,
@@ -176,9 +149,6 @@ class SlackGateway:
             for msg in resp.get("messages", []):
                 text = msg.get("text", "")
                 ts = msg.get("ts", "")
-                attachment_text = flatten_attachment_text(msg.get("attachments"))
-                if attachment_text:
-                    text = f"{text}\n{attachment_text}" if text else attachment_text
                 if text and ts:
                     yield HistoryItem(
                         text=text,

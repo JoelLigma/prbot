@@ -1,8 +1,7 @@
 import logging
-from dataclasses import dataclass
+import re
 
 from fastapi import FastAPI, Request
-from pydantic import ValidationError
 from slack_bolt.adapter.fastapi.async_handler import AsyncSlackRequestHandler
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.context.ack.async_ack import AsyncAck
@@ -18,64 +17,11 @@ from prbot.application.tracking.backfill_missed_messages import (
 from prbot.application.tracking.handle_incoming_message import HandleIncomingMessage
 from prbot.config import SlackConfig
 from prbot.domain.tracking.ports import ChannelCursorPort, ReactionPort
-from prbot.integration.slack.event_models import SlackMessageEvent
-from prbot.integration.slack.gateway import (
-    INTEGRATION_ID,
-    PR_URL_REGEX,
-    SlackGateway,
-    encode_ref,
-    flatten_attachment_text,
-)
+from prbot.integration.slack.gateway import INTEGRATION_ID, SlackGateway, encode_ref
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True)
-class ParsedMessageEvent:
-    channel: str
-    ts: str
-    text: str
-    team: str
-    advance_cursor: bool
-
-
-def parse_message_event(event: dict[str, object]) -> ParsedMessageEvent | None:
-    """Extract the fields needed for PR-URL processing from a Slack message event.
-
-    Handles both initial ``message`` events and ``message_changed`` subtypes —
-    the latter carry the (possibly unfurled) content under ``event["message"]``
-    and should not advance the channel cursor, since the original ``message``
-    event already did. Returns ``None`` if the payload is malformed or lacks a
-    usable channel/ts.
-    """
-    try:
-        evt = SlackMessageEvent.model_validate(event)
-    except ValidationError:
-        logger.warning("Could not parse Slack message event", exc_info=True)
-        return None
-
-    if evt.subtype == "message_changed":
-        if evt.message is None:
-            return None
-        text = evt.message.text
-        ts = evt.message.ts
-        team = evt.message.team or evt.team
-        attachment_text = flatten_attachment_text(evt.message.attachments)
-        if attachment_text:
-            text = f"{text}\n{attachment_text}" if text else attachment_text
-        advance_cursor = False
-    else:
-        text = evt.text
-        ts = evt.ts
-        team = evt.team
-        advance_cursor = True
-
-    if not evt.channel or not ts:
-        return None
-
-    return ParsedMessageEvent(
-        channel=evt.channel, ts=ts, text=text, team=team, advance_cursor=advance_cursor
-    )
+_PR_URL_REGEX = re.compile(r"github\.com/[^/\s]+/[^/\s]+/pull/\d+")
 
 
 class SlackIntegration:
@@ -106,25 +52,25 @@ class SlackIntegration:
     def _setup_events(self) -> None:
         @self._bolt_app.event("message")
         async def on_message(event: dict[str, object]) -> None:
-            await self._process_message_event(event)
+            text = str(event.get("text", ""))
+            channel = str(event.get("channel", ""))
+            ts = str(event.get("ts", ""))
+            team = str(event.get("team", ""))
+            logger.info("Slack message in %s: %s", channel, text[:100])
 
-    async def _process_message_event(self, event: dict[str, object]) -> None:
-        parsed = parse_message_event(event)
-        if parsed is None:
-            return
+            # Always advance the cursor, even for non-PR messages
+            if channel and ts:
+                await self._cursor_repo.upsert_cursor(INTEGRATION_ID, channel, ts)
 
-        if parsed.advance_cursor:
-            await self._cursor_repo.upsert_cursor(INTEGRATION_ID, parsed.channel, parsed.ts)
+            if not _PR_URL_REGEX.search(text):
+                return
 
-        if not PR_URL_REGEX.search(parsed.text):
-            return
-
-        message_ref = encode_ref(parsed.channel, parsed.ts)
-        scope_keys = build_scope_keys(team=parsed.team, channel=parsed.channel)
-        logger.debug("Found PR URL in Slack message, processing %s", message_ref.ref)
-        await self._handle_incoming_message.execute(
-            message_ref=message_ref, text=parsed.text, scope_keys=scope_keys
-        )
+            message_ref = encode_ref(channel, ts)
+            scope_keys = build_scope_keys(team=team, channel=channel)
+            logger.info("Found PR URL in message, processing %s", message_ref.ref)
+            await self._handle_incoming_message.execute(
+                message_ref=message_ref, text=text, scope_keys=scope_keys
+            )
 
     def _setup_commands(self) -> None:
         @self._bolt_app.command("/prbot")
