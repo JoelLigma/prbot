@@ -85,22 +85,45 @@ class HandleGitHubWebhook:
                 config_cache[cache_key] = await self._emoji_resolver.resolve(
                     list(tracked.scope_keys)
                 )
-            emoji = config_cache[cache_key].for_status(status)
+            config = config_cache[cache_key]
+
+            emoji = config.for_status(status)
             fallback = EmojiConfig.fallback_for_status(status)
 
-            if emoji is None or tracked.has_emoji(emoji):
-                continue
+            if emoji is not None and not tracked.has_emoji(emoji):
+                try:
+                    await self._reactions.add_reaction(tracked.message_ref, emoji, fallback)
+                except Exception:
+                    # One unreachable message must not starve the others tracking this PR.
+                    logger.warning(
+                        "Failed to react to %s for %s, skipping",
+                        tracked.message_ref,
+                        pr_url,
+                        exc_info=True,
+                    )
+                    continue
 
-            try:
-                await self._reactions.add_reaction(tracked.message_ref, emoji, fallback)
-            except Exception:
-                # One unreachable message must not starve the others tracking this PR.
-                logger.warning(
-                    "Failed to react to %s for %s, skipping",
-                    tracked.message_ref,
-                    pr_url,
-                    exc_info=True,
-                )
-                continue
+                await self._repo.add_emoji(pr_url, tracked.message_ref, emoji)
 
-            await self._repo.add_emoji(pr_url, tracked.message_ref, emoji)
+            # CI failure is resolved on its own track (from check-runs, not
+            # reviews), so it may be added alongside the review-status emoji.
+            ci_emoji = config.for_status(PRStatus.CI_FAILED)
+            ci_fallback = EmojiConfig.fallback_for_status(PRStatus.CI_FAILED)
+
+            if (
+                pr_info.ci_failing is True
+                and ci_emoji is not None
+                and not tracked.has_emoji(ci_emoji)
+            ):
+                try:
+                    await self._reactions.add_reaction(tracked.message_ref, ci_emoji, ci_fallback)
+                except Exception:
+                    logger.warning(
+                        "Failed to react with CI emoji to %s for %s, skipping",
+                        tracked.message_ref,
+                        pr_url,
+                        exc_info=True,
+                    )
+                    continue
+
+                await self._repo.add_emoji(pr_url, tracked.message_ref, ci_emoji)

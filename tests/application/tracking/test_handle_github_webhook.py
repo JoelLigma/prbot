@@ -1,6 +1,7 @@
 import pytest
 
 from prbot.application.tracking.handle_github_webhook import HandleGitHubWebhook
+from prbot.domain.emoji.value_objects import EmojiConfig
 from prbot.domain.tracking.entities import TrackedPR
 from prbot.domain.tracking.value_objects import MessageRef, PRInfo, PRUrl, Review, ReviewState
 from tests.conftest import (
@@ -11,6 +12,8 @@ from tests.conftest import (
     FakeScopeSettingsRepo,
     FakeUserExclusionRepo,
 )
+
+CI_EMOJI = EmojiConfig().ci_failed
 
 
 def _pr_url() -> PRUrl:
@@ -460,5 +463,122 @@ class TestHandleGitHubWebhook:
 
         # Webhook from a different sender (e.g. PR opened/synchronized event)
         await use_case.execute("o", "r", 1, sender="alice")
+
+        assert len(reactions.added) == 0
+
+    async def test_webhook_adds_ci_emoji_when_failing(
+        self,
+        reactions: FakeReactions,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        repo.stored.append(TrackedPR(pr_url=_pr_url(), message_ref=_msg_ref()))
+        # Open PR with no reviews — no review-status emoji, only the CI one.
+        info = PRInfo(state="open", merged=False, reviews=(), ci_failing=True)
+        source = FakePRSource(info)
+        use_case = HandleGitHubWebhook(
+            source, reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute("o", "r", 1)
+
+        assert reactions.added == [(_msg_ref(), CI_EMOJI)]
+
+    async def test_webhook_adds_ci_emoji_alongside_review_status(
+        self,
+        reactions: FakeReactions,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        # A single webhook pass adds both the review-status emoji AND the CI emoji.
+        repo.stored.append(TrackedPR(pr_url=_pr_url(), message_ref=_msg_ref()))
+        info = PRInfo(
+            state="open",
+            merged=False,
+            reviews=(Review(user_login="alice", state=ReviewState.APPROVED),),
+            ci_failing=True,
+        )
+        source = FakePRSource(info)
+        use_case = HandleGitHubWebhook(
+            source, reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute("o", "r", 1)
+
+        emojis = [e for _, e in reactions.added]
+        assert emojis == ["git-approved", CI_EMOJI]
+
+    async def test_webhook_skips_already_applied_ci_emoji(
+        self,
+        reactions: FakeReactions,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        repo.stored.append(
+            TrackedPR(
+                pr_url=_pr_url(),
+                message_ref=_msg_ref(),
+                applied_emojis=frozenset({CI_EMOJI}),
+            )
+        )
+        info = PRInfo(state="open", merged=False, reviews=(), ci_failing=True)
+        source = FakePRSource(info)
+        use_case = HandleGitHubWebhook(
+            source, reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute("o", "r", 1)
+
+        assert len(reactions.added) == 0
+
+    @pytest.mark.parametrize("ci_failing", [False, None])
+    async def test_webhook_no_ci_emoji_when_not_failing(
+        self,
+        ci_failing: bool | None,
+        reactions: FakeReactions,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        # Phase 1 is additive-only: passing (False) and indeterminate (None) are
+        # both no-ops for the CI emoji.
+        repo.stored.append(TrackedPR(pr_url=_pr_url(), message_ref=_msg_ref()))
+        info = PRInfo(state="open", merged=False, reviews=(), ci_failing=ci_failing)
+        source = FakePRSource(info)
+        use_case = HandleGitHubWebhook(
+            source, reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute("o", "r", 1)
+
+        assert len(reactions.added) == 0
+
+    async def test_webhook_ci_emoji_skipped_for_excluded_sender(
+        self,
+        reactions: FakeReactions,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        scope_keys = ("slack/T1/C123",)
+        repo.stored.append(
+            TrackedPR(pr_url=_pr_url(), message_ref=_msg_ref(), scope_keys=scope_keys)
+        )
+        await exclusions.add("slack/T1/C123", "Cursor")
+        info = PRInfo(state="open", merged=False, reviews=(), ci_failing=True)
+        source = FakePRSource(info)
+        use_case = HandleGitHubWebhook(
+            source, reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute("o", "r", 1, sender="Cursor")
 
         assert len(reactions.added) == 0

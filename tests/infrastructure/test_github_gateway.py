@@ -144,3 +144,130 @@ class TestGitHubGateway:
 
         with pytest.raises(Exception):  # noqa: B017
             await gateway.fetch_pr_info(pr_url)
+
+
+def _mock_pr_with_head(sha: str = "abc123") -> None:
+    """Mock the PR + reviews endpoints, including a head SHA for CI lookups."""
+    respx.get("https://api.github.com/repos/octocat/hello/pulls/1").mock(
+        return_value=Response(200, json={"state": "open", "merged": False, "head": {"sha": sha}})
+    )
+    respx.get("https://api.github.com/repos/octocat/hello/pulls/1/reviews").mock(
+        return_value=Response(200, json=[])
+    )
+
+
+def _mock_check_runs(sha: str, runs: list[dict], status_code: int = 200) -> None:
+    respx.get(f"https://api.github.com/repos/octocat/hello/commits/{sha}/check-runs").mock(
+        return_value=Response(status_code, json={"check_runs": runs})
+    )
+
+
+class TestFetchCiFailing:
+    @respx.mock
+    async def test_no_head_sha_skips_ci_and_returns_none(
+        self, gateway: GitHubGateway, pr_url: PRUrl
+    ) -> None:
+        # PR payload without a head — no check-runs request should be made.
+        _mock_installation_and_token()
+        respx.get("https://api.github.com/repos/octocat/hello/pulls/1").mock(
+            return_value=Response(200, json={"state": "open", "merged": False})
+        )
+        respx.get("https://api.github.com/repos/octocat/hello/pulls/1/reviews").mock(
+            return_value=Response(200, json=[])
+        )
+
+        info = await gateway.fetch_pr_info(pr_url)
+
+        assert info.ci_failing is None
+
+    @respx.mock
+    async def test_failing_run_returns_true(self, gateway: GitHubGateway, pr_url: PRUrl) -> None:
+        _mock_installation_and_token()
+        _mock_pr_with_head()
+        _mock_check_runs(
+            "abc123",
+            [
+                {"status": "completed", "conclusion": "success"},
+                {"status": "completed", "conclusion": "failure"},
+            ],
+        )
+
+        info = await gateway.fetch_pr_info(pr_url)
+
+        assert info.ci_failing is True
+
+    @respx.mock
+    async def test_all_passing_returns_false(self, gateway: GitHubGateway, pr_url: PRUrl) -> None:
+        _mock_installation_and_token()
+        _mock_pr_with_head()
+        _mock_check_runs(
+            "abc123",
+            [
+                {"status": "completed", "conclusion": "success"},
+                {"status": "completed", "conclusion": "neutral"},
+            ],
+        )
+
+        info = await gateway.fetch_pr_info(pr_url)
+
+        assert info.ci_failing is False
+
+    @respx.mock
+    async def test_in_progress_run_returns_none(
+        self, gateway: GitHubGateway, pr_url: PRUrl
+    ) -> None:
+        _mock_installation_and_token()
+        _mock_pr_with_head()
+        _mock_check_runs(
+            "abc123",
+            [
+                {"status": "completed", "conclusion": "success"},
+                {"status": "in_progress", "conclusion": None},
+            ],
+        )
+
+        info = await gateway.fetch_pr_info(pr_url)
+
+        assert info.ci_failing is None
+
+    @respx.mock
+    async def test_no_runs_returns_none(self, gateway: GitHubGateway, pr_url: PRUrl) -> None:
+        _mock_installation_and_token()
+        _mock_pr_with_head()
+        _mock_check_runs("abc123", [])
+
+        info = await gateway.fetch_pr_info(pr_url)
+
+        assert info.ci_failing is None
+
+    @respx.mock
+    async def test_permission_error_returns_none(
+        self, gateway: GitHubGateway, pr_url: PRUrl
+    ) -> None:
+        # App lacks the Checks:read permission — must degrade gracefully, not raise.
+        _mock_installation_and_token()
+        _mock_pr_with_head()
+        _mock_check_runs("abc123", [], status_code=403)
+
+        info = await gateway.fetch_pr_info(pr_url)
+
+        assert info.ci_failing is None
+
+    @respx.mock
+    async def test_failing_run_still_failing_even_if_others_pending(
+        self, gateway: GitHubGateway, pr_url: PRUrl
+    ) -> None:
+        # A failure is definitive even while other checks are still running.
+        _mock_installation_and_token()
+        _mock_pr_with_head()
+        _mock_check_runs(
+            "abc123",
+            [
+                {"status": "completed", "conclusion": "failure"},
+                {"status": "in_progress", "conclusion": None},
+            ],
+        )
+
+        info = await gateway.fetch_pr_info(pr_url)
+
+        assert info.ci_failing is True

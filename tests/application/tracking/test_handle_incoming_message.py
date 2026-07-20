@@ -12,6 +12,8 @@ from tests.conftest import (
     FakeUserExclusionRepo,
 )
 
+CI_EMOJI = EmojiConfig().ci_failed
+
 
 def _msg_ref() -> MessageRef:
     return MessageRef(integration_id="slack", ref="C123:1234.5678")
@@ -259,6 +261,71 @@ class TestHandleIncomingMessage:
             "github.com/o/r/pull/1",
             scope_keys=["slack/T1/C123", "slack/T1", "slack"],
         )
+
+        assert len(reactions.added) == 0
+        assert repo.stored[0].applied_emojis == frozenset()
+
+    async def test_ci_failing_pr_gets_ci_emoji_on_initial_tracking(
+        self,
+        reactions: FakeReactions,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        # Open PR with no reviews but failing CI — pasting the URL should apply
+        # the CI emoji even though there is no review-status emoji.
+        source = FakePRSource(PRInfo(state="open", merged=False, reviews=(), ci_failing=True))
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute(_msg_ref(), "github.com/o/r/pull/1")
+
+        assert reactions.added == [(_msg_ref(), CI_EMOJI)]
+        assert repo.stored[0].applied_emojis == frozenset({CI_EMOJI})
+
+    async def test_ci_emoji_added_alongside_review_status_on_initial_tracking(
+        self,
+        reactions: FakeReactions,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        source = FakePRSource(
+            PRInfo(
+                state="open",
+                merged=False,
+                reviews=(Review(user_login="alice", state=ReviewState.APPROVED),),
+                ci_failing=True,
+            )
+        )
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute(_msg_ref(), "github.com/o/r/pull/1")
+
+        assert [e for _, e in reactions.added] == ["git-approved", CI_EMOJI]
+        assert repo.stored[0].applied_emojis == frozenset({"git-approved", CI_EMOJI})
+
+    @pytest.mark.parametrize("ci_failing", [False, None])
+    async def test_no_ci_emoji_when_not_failing_on_initial_tracking(
+        self,
+        ci_failing: bool | None,
+        reactions: FakeReactions,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        source = FakePRSource(PRInfo(state="open", merged=False, reviews=(), ci_failing=ci_failing))
+        use_case = HandleIncomingMessage(
+            [source], reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute(_msg_ref(), "github.com/o/r/pull/1")
 
         assert len(reactions.added) == 0
         assert repo.stored[0].applied_emojis == frozenset()

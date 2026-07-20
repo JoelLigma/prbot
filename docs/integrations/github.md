@@ -26,10 +26,16 @@ Under **Permissions & events**, configure:
 
 ### Repository permissions
 
-| Permission       | Access    | Purpose                    |
-| ---------------- | --------- | -------------------------- |
-| **Pull requests**| Read-only | Fetch PR status & reviews  |
-| **Metadata**     | Read-only | Required by GitHub         |
+| Permission       | Access    | Purpose                              |
+| ---------------- | --------- | ------------------------------------ |
+| **Pull requests**| Read-only | Fetch PR status & reviews            |
+| **Checks**       | Read-only | Fetch CI/check-run state             |
+| **Metadata**     | Read-only | Required by GitHub                   |
+
+!!! note "Checks permission is optional"
+    The **Checks** permission and **Check suites** subscription below are only
+    needed for the CI-failure emoji (❌). Omit them and prbot still works — it
+    just won't react to CI failures.
 
 ### Event subscriptions
 
@@ -39,6 +45,11 @@ Subscribe to these events:
 | ------------------------ | -------------------------------------------- |
 | **Pull request**         | Notified when PRs are opened, closed, merged |
 | **Pull request review**  | Notified when reviews are submitted          |
+| **Check suite**          | Notified when CI completes                   |
+
+!!! tip "Grant Checks before subscribing to Check suite"
+    **Check suite** only becomes tickable once **Checks** is set to Read-only —
+    GitHub restricts event subscriptions to permissions you already hold.
 
 ## Step 3: Generate a private key
 
@@ -75,6 +86,27 @@ PR_BOT_GITHUB_WEBHOOK_SECRET=your-webhook-secret
     - Set it as a multi-line value in your `.env` file using quotes
 
     In production (e.g. Fly.io), set the secret via the platform's secrets management.
+
+## Enabling the CI-failure emoji on an existing app
+
+The **Checks** permission and **Check suite** subscription (Step 2) power the
+❌ CI-failure emoji. If you add them to an app that was **already installed**,
+two extra steps are needed:
+
+1. **Approve the updated permissions.** Go to
+   **[github.com/settings/installations](https://github.com/settings/installations)**
+   → **Configure** → accept the request. Permission changes are not applied to
+   existing installations until approved — until then the token lacks Checks
+   access and you'll see `403 Forbidden` on check-runs in the logs. (Org installs
+   need an owner to approve.)
+2. **Restart prbot.** Past `check_suite` webhooks are never redelivered, so a
+   restart is what lets startup reconciliation catch failures that already
+   happened.
+
+!!! tip "Verifying delivery"
+    The app's **Advanced** tab lists **Recent Deliveries**. After setup you
+    should see `check_suite` deliveries returning `200`; use **Redeliver** to
+    re-trigger one without waiting for a fresh CI run.
 
 ## How authentication works
 

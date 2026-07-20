@@ -77,6 +77,7 @@ The script uploads each image from `emojis/` using the filename (without extensi
 | ![git-changes-requested](images/emojis/git-changes-requested.png){: style="height:24px"} | `:git-changes-requested:` | PRs with changes requested |
 | ![speech_balloon](images/emojis/speech_balloon.png){: style="height:24px"} | `:speech_balloon:` | PRs with only comments |
 | 🪦 | `:headstone:` | Closed PRs (native Unicode, no upload needed) |
+| ❌ | `:ci_failed:` | PRs with failing CI (custom; falls back to `:x:` / ❌ if not uploaded) |
 
 ### Overriding defaults
 
@@ -89,8 +90,11 @@ Override the default emoji reactions by setting environment variables with the `
 | `PR_BOT_EMOJI__COMMENTED`           | `speech_balloon`           |
 | `PR_BOT_EMOJI__MERGED`              | `git-merged`               |
 | `PR_BOT_EMOJI__CLOSED`              | `headstone`                |
+| `PR_BOT_EMOJI__CI_FAILED`           | `ci_failed`                |
 
 Open PRs with no reviews receive no emoji reaction.
+
+The CI-failure emoji is added when any check run on the PR's head commit fails. Subscribing the GitHub App to the **Check suites** event is required — see [GitHub Integration](integrations/github.md).
 
 Values can be either:
 

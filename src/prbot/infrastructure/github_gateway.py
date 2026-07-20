@@ -18,6 +18,9 @@ _USER_TYPE_TO_KIND: dict[str, GitHubUserKind] = {
 
 _GITHUB_PR_PATTERN = re.compile(r"github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)")
 
+# check-run conclusions that count as a CI failure.
+_FAILING_CONCLUSIONS = frozenset({"failure", "timed_out", "startup_failure", "action_required"})
+
 logger = logging.getLogger(__name__)
 
 
@@ -134,12 +137,62 @@ class GitHubGateway:
                 break
             page += 1
 
+        head_sha = pr_data.get("head", {}).get("sha")
+        ci_failing = await self._fetch_ci_failing(pr_url, head_sha, headers)
+
         return PRInfo(
             state=pr_data["state"],
             merged=pr_data.get("merged", False),
             reviews=tuple(reviews),
             author_login=pr_data.get("user", {}).get("login", ""),
+            ci_failing=ci_failing,
         )
+
+    async def _fetch_ci_failing(
+        self,
+        pr_url: PRUrl,
+        head_sha: str | None,
+        headers: dict[str, str],
+    ) -> bool | None:
+        """Return the aggregate CI state for a PR's head commit.
+
+        Tri-state: ``True`` if any check-run failed, ``False`` if checks completed
+        with none failing, ``None`` if indeterminate — no checks, still running, or
+        the request failed (e.g. the App lacks the *Checks: read* permission).
+        """
+        if not head_sha:
+            return None
+
+        try:
+            runs: list[dict] = []
+            page = 1
+            while True:
+                resp = await self._client.get(
+                    f"/repos/{pr_url.owner}/{pr_url.repo}/commits/{head_sha}/check-runs",
+                    params={"per_page": 100, "page": page},
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                page_runs = resp.json().get("check_runs", [])
+                runs.extend(page_runs)
+                if len(page_runs) < 100:
+                    break
+                page += 1
+        except Exception:
+            logger.warning("Failed to fetch check-runs for %s@%s", pr_url, head_sha[:7])
+            return None
+
+        if not runs:
+            return None
+
+        if any(r.get("conclusion") in _FAILING_CONCLUSIONS for r in runs):
+            return True
+
+        # No failures — only report a definitive pass once every run has completed.
+        if any(r.get("status") != "completed" for r in runs):
+            return None
+
+        return False
 
     async def lookup_user(self, github_username: str) -> GitHubUserRef | None:
         """Resolve a GitHub login via the public API."""

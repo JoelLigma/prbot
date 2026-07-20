@@ -14,6 +14,12 @@ class PRStatus(StrEnum):
     APPROVED = "approved"
     COMMENTED = "commented"
     OPEN = "open"
+    # The statuses above are mutually-exclusive outcomes of resolve_pr_status()'s
+    # priority chain — one wins per evaluation. CI failure is derived from
+    # check-runs rather than reviews, so it is resolved on its own track in
+    # HandleGitHubWebhook: a single webhook can add this emoji *and* a review
+    # status emoji.
+    CI_FAILED = "ci_failed"
 
 
 class ReviewState(StrEnum):
@@ -62,3 +68,4 @@ class PRInfo(BaseModel, frozen=True):
     merged: bool
     reviews: tuple[Review, ...]
     author_login: str = ""
+    ci_failing: bool | None = None

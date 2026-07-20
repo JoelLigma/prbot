@@ -32,3 +32,19 @@ class PullRequestReviewEvent(BaseModel):
     pull_request: WebhookPullRequest
     repository: WebhookRepository
     sender: WebhookUser
+
+
+class WebhookCheckSuitePullRequest(BaseModel):
+    number: int
+
+
+class WebhookCheckSuite(BaseModel):
+    # PRs are only populated for same-repo branches; empty for forked-PR runs.
+    pull_requests: list[WebhookCheckSuitePullRequest] = []
+
+
+class CheckSuiteEvent(BaseModel):
+    action: str  # "completed", "requested", "rerequested"
+    check_suite: WebhookCheckSuite
+    repository: WebhookRepository
+    sender: WebhookUser

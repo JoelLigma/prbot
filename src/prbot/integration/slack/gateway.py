@@ -38,6 +38,14 @@ class ChannelInfo:
     team_id: str
 
 
+# Slack short-names that diverge from the derived Unicode name. The derivation
+# (Unicode name → snake_case) matches Slack for most emoji, but a few Slack
+# aliases differ — e.g. ❌ is `:x:`, not `:cross_mark:`.
+_SLACK_NAME_ALIASES: dict[str, str] = {
+    "cross_mark": "x",
+}
+
+
 class _MessageGoneError(Exception):
     """The target message no longer exists — retrying any emoji is pointless."""
 
@@ -64,9 +72,10 @@ class SlackGateway:
         # spaces replaced by underscores — this matches Slack's naming
         # convention for most standard emoji.
         try:
-            return unicodedata.name(emoji[0]).lower().replace(" ", "_").replace("-", "_")
+            name = unicodedata.name(emoji[0]).lower().replace(" ", "_").replace("-", "_")
         except ValueError:
             return emoji
+        return _SLACK_NAME_ALIASES.get(name, name)
 
     async def add_reaction(
         self,
