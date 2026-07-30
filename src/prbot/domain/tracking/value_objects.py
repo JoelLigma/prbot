@@ -6,7 +6,13 @@ from pydantic import BaseModel
 
 
 class PRStatus(StrEnum):
-    """Resolved status of a PR, ordered by priority."""
+    """Resolved status of a PR.
+
+    Every status except ``CI_FAILED`` is a mutually-exclusive outcome of
+    ``resolve_pr_status`` — one wins per evaluation. ``CI_FAILED`` comes from
+    check-runs, not reviews, so it is applied *alongside* that winner rather
+    than replacing it.
+    """
 
     MERGED = "merged"
     CLOSED = "closed"
@@ -14,11 +20,6 @@ class PRStatus(StrEnum):
     APPROVED = "approved"
     COMMENTED = "commented"
     OPEN = "open"
-    # The statuses above are mutually-exclusive outcomes of resolve_pr_status()'s
-    # priority chain — one wins per evaluation. CI failure is derived from
-    # check-runs rather than reviews, so it is resolved on its own track in
-    # HandleGitHubWebhook: a single webhook can add this emoji *and* a review
-    # status emoji.
     CI_FAILED = "ci_failed"
 
 
@@ -59,6 +60,17 @@ class Review(BaseModel, frozen=True):
 
     user_login: str
     state: ReviewState
+
+
+class CheckRun(BaseModel, frozen=True):
+    """A single CI check-run on a commit, as reported by GitHub.
+
+    Generic status data only — deciding what counts as "failing" is a policy
+    concern left to the caller (see ``resolve_ci_failing``).
+    """
+
+    status: str  # "queued" | "in_progress" | "completed"
+    conclusion: str | None  # "success" | "failure" | ...; None while running
 
 
 class PRInfo(BaseModel, frozen=True):

@@ -2,13 +2,15 @@ import logging
 from collections.abc import Sequence
 
 from prbot.application.exclusions.manage_self_reviews import MUTE_SELF_REVIEWS_KEY
+from prbot.application.tracking.ci_emoji import ci_emoji_to_add
 from prbot.domain.common.ports import ScopeSettingsPort
 from prbot.domain.emoji.ports import EmojiConfigResolverPort
+from prbot.domain.emoji.value_objects import EmojiConfig
 from prbot.domain.exclusions.ports import UserExclusionPort
 from prbot.domain.tracking.entities import TrackedPR
 from prbot.domain.tracking.ports import PRRepositoryPort, PRSourcePort, ReactionPort
 from prbot.domain.tracking.status_resolver import filter_pr_info, resolve_pr_status
-from prbot.domain.tracking.value_objects import MessageRef, PRStatus
+from prbot.domain.tracking.value_objects import MessageRef, PRInfo
 
 logger = logging.getLogger(__name__)
 
@@ -76,17 +78,23 @@ class HandleIncomingMessage:
                     await self._reactions.add_reaction(message_ref, emoji, fallback)
                     tracked = tracked.with_added_emoji(emoji)
 
-                # CI failure is resolved on its own track (from check-runs, not
+                # CI failure is an independent check (derived from check-runs, not
                 # reviews), so it may be added alongside the review-status emoji.
-                ci_emoji = emoji_config.for_status(PRStatus.CI_FAILED)
-                ci_fallback = emoji_config.fallback_for_status(PRStatus.CI_FAILED)
-
-                if (
-                    pr_info.ci_failing is True
-                    and ci_emoji is not None
-                    and not tracked.has_emoji(ci_emoji)
-                ):
-                    await self._reactions.add_reaction(message_ref, ci_emoji, ci_fallback)
-                    tracked = tracked.with_added_emoji(ci_emoji)
+                tracked = await self._apply_ci_emoji(message_ref, tracked, pr_info, emoji_config)
 
                 await self._repo.save(tracked)
+
+    async def _apply_ci_emoji(
+        self,
+        message_ref: MessageRef,
+        tracked: TrackedPR,
+        pr_info: PRInfo,
+        config: EmojiConfig,
+    ) -> TrackedPR:
+        """Add the CI-failure emoji if CI is failing; return the updated TrackedPR."""
+        to_add = ci_emoji_to_add(config, pr_info, tracked)
+        if to_add is None:
+            return tracked
+        emoji, fallback = to_add
+        await self._reactions.add_reaction(message_ref, emoji, fallback)
+        return tracked.with_added_emoji(emoji)

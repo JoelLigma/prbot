@@ -1,5 +1,5 @@
-from prbot.domain.tracking.status_resolver import resolve_pr_status
-from prbot.domain.tracking.value_objects import PRInfo, PRStatus, Review, ReviewState
+from prbot.domain.tracking.status_resolver import resolve_ci_failing, resolve_pr_status
+from prbot.domain.tracking.value_objects import CheckRun, PRInfo, PRStatus, Review, ReviewState
 
 
 def _make_pr_info(
@@ -95,3 +95,33 @@ class TestResolveStatus:
             )
         )
         assert resolve_pr_status(pr) == PRStatus.APPROVED
+
+
+def _run(status: str, conclusion: str | None) -> CheckRun:
+    return CheckRun(status=status, conclusion=conclusion)
+
+
+class TestResolveCiFailing:
+    def test_no_runs_is_indeterminate(self) -> None:
+        assert resolve_ci_failing(()) is None
+
+    def test_any_failing_conclusion_is_failing(self) -> None:
+        runs = (_run("completed", "success"), _run("completed", "failure"))
+        assert resolve_ci_failing(runs) is True
+
+    def test_all_passing_is_not_failing(self) -> None:
+        runs = (_run("completed", "success"), _run("completed", "neutral"))
+        assert resolve_ci_failing(runs) is False
+
+    def test_still_running_is_indeterminate(self) -> None:
+        # No failures yet, but not every run has completed — don't call it a pass.
+        runs = (_run("completed", "success"), _run("in_progress", None))
+        assert resolve_ci_failing(runs) is None
+
+    def test_failure_wins_over_incomplete(self) -> None:
+        # A definitive failure short-circuits even if other runs are pending.
+        runs = (_run("in_progress", None), _run("completed", "timed_out"))
+        assert resolve_ci_failing(runs) is True
+
+    def test_action_required_counts_as_failing(self) -> None:
+        assert resolve_ci_failing((_run("completed", "action_required"),)) is True

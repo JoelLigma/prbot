@@ -94,8 +94,6 @@ Override the default emoji reactions by setting environment variables with the `
 
 Open PRs with no reviews receive no emoji reaction.
 
-The CI-failure emoji is added when any check run on the PR's head commit fails. Subscribing the GitHub App to the **Check suites** event is required — see [GitHub Integration](integrations/github.md).
-
 Values can be either:
 
 - **Custom emoji names** (ASCII, no colons) — e.g. `shipit`, `git-merged`. These must be uploaded to your Slack workspace or Discord server.

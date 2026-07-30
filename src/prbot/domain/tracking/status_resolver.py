@@ -1,4 +1,23 @@
-from prbot.domain.tracking.value_objects import PRInfo, PRStatus, ReviewState
+from prbot.domain.tracking.value_objects import CheckRun, PRInfo, PRStatus, ReviewState
+
+# check-run conclusions that count as a CI failure.
+_FAILING_CI_CONCLUSIONS = frozenset({"failure", "timed_out", "startup_failure", "action_required"})
+
+
+def resolve_ci_failing(check_runs: tuple[CheckRun, ...]) -> bool | None:
+    """Derive the aggregate CI state for a commit from its check-runs.
+
+    Tri-state: ``True`` if any run failed, ``False`` if every run completed with
+    none failing, ``None`` if indeterminate — no runs, or some still running.
+    """
+    if not check_runs:
+        return None
+    if any(run.conclusion in _FAILING_CI_CONCLUSIONS for run in check_runs):
+        return True
+    # No failures —> only report a definitive pass once every run has completed.
+    if any(run.status != "completed" for run in check_runs):
+        return None
+    return False
 
 
 def filter_pr_info(

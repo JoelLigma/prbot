@@ -7,7 +7,8 @@ import httpx
 import jwt
 
 from prbot.domain.exclusions.ports import GitHubUserKind, GitHubUserRef
-from prbot.domain.tracking.value_objects import PRInfo, PRUrl, Review, ReviewState
+from prbot.domain.tracking.status_resolver import resolve_ci_failing
+from prbot.domain.tracking.value_objects import CheckRun, PRInfo, PRUrl, Review, ReviewState
 
 _BOT_SUFFIX = "[bot]"
 _USER_TYPE_TO_KIND: dict[str, GitHubUserKind] = {
@@ -17,9 +18,6 @@ _USER_TYPE_TO_KIND: dict[str, GitHubUserKind] = {
 }
 
 _GITHUB_PR_PATTERN = re.compile(r"github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)")
-
-# check-run conclusions that count as a CI failure.
-_FAILING_CONCLUSIONS = frozenset({"failure", "timed_out", "startup_failure", "action_required"})
 
 logger = logging.getLogger(__name__)
 
@@ -138,33 +136,34 @@ class GitHubGateway:
             page += 1
 
         head_sha = pr_data.get("head", {}).get("sha")
-        ci_failing = await self._fetch_ci_failing(pr_url, head_sha, headers)
+        check_runs = await self._fetch_check_runs(pr_url, head_sha, headers)
 
         return PRInfo(
             state=pr_data["state"],
             merged=pr_data.get("merged", False),
             reviews=tuple(reviews),
             author_login=pr_data.get("user", {}).get("login", ""),
-            ci_failing=ci_failing,
+            ci_failing=resolve_ci_failing(check_runs),
         )
 
-    async def _fetch_ci_failing(
+    async def _fetch_check_runs(
         self,
         pr_url: PRUrl,
         head_sha: str | None,
         headers: dict[str, str],
-    ) -> bool | None:
-        """Return the aggregate CI state for a PR's head commit.
+    ) -> tuple[CheckRun, ...]:
+        """Fetch all check-runs for a commit.
 
-        Tri-state: ``True`` if any check-run failed, ``False`` if checks completed
-        with none failing, ``None`` if indeterminate — no checks, still running, or
-        the request failed (e.g. the App lacks the *Checks: read* permission).
+        Generic status data only — interpreting what counts as "failing" is the
+        caller's concern (see ``resolve_ci_failing``). Returns an empty tuple when
+        there is no head SHA or the request fails (e.g. the App lacks the
+        *Checks: read* permission); callers treat "no data" as indeterminate.
         """
         if not head_sha:
-            return None
+            return ()
 
         try:
-            runs: list[dict] = []
+            runs: list[CheckRun] = []
             page = 1
             while True:
                 resp = await self._client.get(
@@ -174,25 +173,18 @@ class GitHubGateway:
                 )
                 resp.raise_for_status()
                 page_runs = resp.json().get("check_runs", [])
-                runs.extend(page_runs)
+                runs.extend(
+                    CheckRun(status=r.get("status", ""), conclusion=r.get("conclusion"))
+                    for r in page_runs
+                )
                 if len(page_runs) < 100:
                     break
                 page += 1
         except Exception:
             logger.warning("Failed to fetch check-runs for %s@%s", pr_url, head_sha[:7])
-            return None
+            return ()
 
-        if not runs:
-            return None
-
-        if any(r.get("conclusion") in _FAILING_CONCLUSIONS for r in runs):
-            return True
-
-        # No failures — only report a definitive pass once every run has completed.
-        if any(r.get("status") != "completed" for r in runs):
-            return None
-
-        return False
+        return tuple(runs)
 
     async def lookup_user(self, github_username: str) -> GitHubUserRef | None:
         """Resolve a GitHub login via the public API."""

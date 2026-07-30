@@ -45,6 +45,10 @@ _SLACK_NAME_ALIASES: dict[str, str] = {
     "cross_mark": "x",
 }
 
+# Slack API error codes we handle specially when a reaction fails. slack_sdk
+# raises these embedded in a longer message, so we detect them by substring.
+_KNOWN_SLACK_ERRORS = ("already_reacted", "invalid_name", "no_reaction", "message_not_found")
+
 
 class _MessageGoneError(Exception):
     """The target message no longer exists — retrying any emoji is pointless."""
@@ -100,6 +104,11 @@ class SlackGateway:
         except _MessageGoneError:
             return
 
+    @staticmethod
+    def _slack_error_code(message: str) -> str:
+        """Extract a known Slack API error code from an exception message, or ''."""
+        return next((code for code in _KNOWN_SLACK_ERRORS if code in message), "")
+
     async def _try_react(self, channel: str, timestamp: str, emoji: str) -> bool:
         """Add a reaction, swallowing benign failures. Returns True on success."""
         try:
@@ -110,19 +119,22 @@ class SlackGateway:
             )
             return True
         except Exception as exc:
-            msg = str(exc)
-            if "already_reacted" in msg:
-                logger.debug("Already reacted with %s", emoji)
-                return True
-            if "invalid_name" in msg or "no_reaction" in msg:
-                logger.warning("Unknown emoji %r in workspace for %s:%s", emoji, channel, timestamp)
-                return False
-            if "message_not_found" in msg:
-                logger.warning(
-                    "Message %s:%s no longer exists, skipping reaction", channel, timestamp
-                )
-                raise _MessageGoneError from exc
-            raise
+            match self._slack_error_code(str(exc)):
+                case "already_reacted":
+                    logger.debug("Already reacted with %s", emoji)
+                    return True
+                case "invalid_name" | "no_reaction":
+                    logger.warning(
+                        "Unknown emoji %r in workspace for %s:%s", emoji, channel, timestamp
+                    )
+                    return False
+                case "message_not_found":
+                    logger.warning(
+                        "Message %s:%s no longer exists, skipping reaction", channel, timestamp
+                    )
+                    raise _MessageGoneError from exc
+                case _:
+                    raise
 
     async def list_bot_channels(self) -> list[ChannelInfo]:
         """List all channels the bot is a member of, using cursor-based pagination."""
