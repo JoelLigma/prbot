@@ -3,6 +3,7 @@ import time
 import unicodedata
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from enum import StrEnum
 
 from slack_sdk.web.async_client import AsyncWebClient
 
@@ -45,9 +46,18 @@ _SLACK_NAME_ALIASES: dict[str, str] = {
     "cross_mark": "x",
 }
 
-# Slack API error codes we handle specially when a reaction fails. slack_sdk
-# raises these embedded in a longer message, so we detect them by substring.
-_KNOWN_SLACK_ERRORS = ("already_reacted", "invalid_name", "no_reaction", "message_not_found")
+
+class SlackErrorCode(StrEnum):
+    """Slack API error codes we handle specially when a reaction fails.
+
+    slack_sdk raises these embedded in a longer message, so we detect them by
+    substring (see ``_slack_error_code``).
+    """
+
+    ALREADY_REACTED = "already_reacted"
+    INVALID_NAME = "invalid_name"
+    NO_REACTION = "no_reaction"
+    MESSAGE_NOT_FOUND = "message_not_found"
 
 
 class _MessageGoneError(Exception):
@@ -105,9 +115,9 @@ class SlackGateway:
             return
 
     @staticmethod
-    def _slack_error_code(message: str) -> str:
-        """Extract a known Slack API error code from an exception message, or ''."""
-        return next((code for code in _KNOWN_SLACK_ERRORS if code in message), "")
+    def _slack_error_code(message: str) -> SlackErrorCode | None:
+        """Extract a known Slack API error code from an exception message, or None."""
+        return next((code for code in SlackErrorCode if code.value in message), None)
 
     async def _try_react(self, channel: str, timestamp: str, emoji: str) -> bool:
         """Add a reaction, swallowing benign failures. Returns True on success."""
@@ -120,15 +130,15 @@ class SlackGateway:
             return True
         except Exception as exc:
             match self._slack_error_code(str(exc)):
-                case "already_reacted":
+                case SlackErrorCode.ALREADY_REACTED:
                     logger.debug("Already reacted with %s", emoji)
                     return True
-                case "invalid_name" | "no_reaction":
+                case SlackErrorCode.INVALID_NAME | SlackErrorCode.NO_REACTION:
                     logger.warning(
                         "Unknown emoji %r in workspace for %s:%s", emoji, channel, timestamp
                     )
                     return False
-                case "message_not_found":
+                case SlackErrorCode.MESSAGE_NOT_FOUND:
                     logger.warning(
                         "Message %s:%s no longer exists, skipping reaction", channel, timestamp
                     )
