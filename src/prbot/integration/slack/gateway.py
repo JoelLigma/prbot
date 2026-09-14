@@ -38,6 +38,10 @@ class ChannelInfo:
     team_id: str
 
 
+class _MessageGoneError(Exception):
+    """The target message no longer exists — retrying any emoji is pointless."""
+
+
 class SlackGateway:
     """Concrete adapter: manages Slack emoji reactions via the Slack Web API."""
 
@@ -71,16 +75,19 @@ class SlackGateway:
         fallback_emoji: str | None = None,
     ) -> None:
         channel, timestamp = decode_ref(message_ref)
-        if await self._try_react(channel, timestamp, emoji):
-            return
-        if fallback_emoji and await self._try_react(channel, timestamp, fallback_emoji):
-            logger.info(
-                "Used fallback emoji %r for %s:%s (primary %r unavailable)",
-                fallback_emoji,
-                channel,
-                timestamp,
-                emoji,
-            )
+        try:
+            if await self._try_react(channel, timestamp, emoji):
+                return
+            if fallback_emoji and await self._try_react(channel, timestamp, fallback_emoji):
+                logger.info(
+                    "Used fallback emoji %r for %s:%s (primary %r unavailable)",
+                    fallback_emoji,
+                    channel,
+                    timestamp,
+                    emoji,
+                )
+        except _MessageGoneError:
+            logger.warning("Message %s:%s no longer exists, skipping reaction", channel, timestamp)
 
     async def _try_react(self, channel: str, timestamp: str, emoji: str) -> bool:
         """Add a reaction, swallowing benign failures. Returns True on success."""
@@ -99,6 +106,9 @@ class SlackGateway:
             if "invalid_name" in msg or "no_reaction" in msg:
                 logger.warning("Unknown emoji %r in workspace for %s:%s", emoji, channel, timestamp)
                 return False
+            if "message_not_found" in msg:
+                # Deleted message — no emoji will ever land on it.
+                raise _MessageGoneError from exc
             raise
 
     async def list_bot_channels(self) -> list[ChannelInfo]:

@@ -45,3 +45,21 @@ class TestSlackGateway:
 
         with pytest.raises(Exception, match="channel_not_found"):
             await gateway.add_reaction(_msg_ref(), "eyes")
+
+    async def test_add_reaction_ignores_deleted_message(
+        self, gateway: SlackGateway, mock_client: AsyncMock
+    ) -> None:
+        mock_client.reactions_add.side_effect = Exception("message_not_found")
+
+        # Should not raise — a deleted message is a dead end, not an error.
+        await gateway.add_reaction(_msg_ref(), "git-approved")
+
+    async def test_add_reaction_skips_fallback_when_message_deleted(
+        self, gateway: SlackGateway, mock_client: AsyncMock
+    ) -> None:
+        mock_client.reactions_add.side_effect = Exception("message_not_found")
+
+        await gateway.add_reaction(_msg_ref(), "git-approved", "\N{WHITE HEAVY CHECK MARK}")
+
+        # No point retrying the fallback against a message that no longer exists.
+        assert mock_client.reactions_add.await_count == 1

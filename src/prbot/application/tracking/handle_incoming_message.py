@@ -51,7 +51,9 @@ class HandleIncomingMessage:
                 try:
                     pr_info = await source.fetch_pr_info(pr_url)
                 except Exception:
-                    logger.warning("Failed to fetch PR info for %s, skipping", pr_url)
+                    logger.warning(
+                        "Failed to fetch PR info for %s, skipping", pr_url, exc_info=True
+                    )
                     continue
 
                 status = resolve_pr_status(

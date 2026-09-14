@@ -49,7 +49,7 @@ class HandleGitHubWebhook:
         try:
             pr_info = await self._source.fetch_pr_info(pr_url)
         except Exception:
-            logger.warning("Failed to fetch PR info for %s, skipping", pr_url)
+            logger.warning("Failed to fetch PR info for %s, skipping", pr_url, exc_info=True)
             return
 
         # Cache per scope-chain to avoid repeated DB queries for identical scopes
@@ -91,5 +91,16 @@ class HandleGitHubWebhook:
             if emoji is None or tracked.has_emoji(emoji):
                 continue
 
-            await self._reactions.add_reaction(tracked.message_ref, emoji, fallback)
+            try:
+                await self._reactions.add_reaction(tracked.message_ref, emoji, fallback)
+            except Exception:
+                # One unreachable message must not starve the others tracking this PR.
+                logger.warning(
+                    "Failed to react to %s for %s, skipping",
+                    tracked.message_ref,
+                    pr_url,
+                    exc_info=True,
+                )
+                continue
+
             await self._repo.add_emoji(pr_url, tracked.message_ref, emoji)
