@@ -2,15 +2,14 @@ import logging
 from collections.abc import Sequence
 
 from prbot.application.exclusions.manage_self_reviews import MUTE_SELF_REVIEWS_KEY
-from prbot.application.tracking.ci_emoji import ci_emoji_to_add
+from prbot.application.tracking.reaction_manager import ReactionManager
 from prbot.domain.common.ports import ScopeSettingsPort
 from prbot.domain.emoji.ports import EmojiConfigResolverPort
-from prbot.domain.emoji.value_objects import EmojiConfig
 from prbot.domain.exclusions.ports import UserExclusionPort
 from prbot.domain.tracking.entities import TrackedPR
 from prbot.domain.tracking.ports import PRRepositoryPort, PRSourcePort, ReactionPort
 from prbot.domain.tracking.status_resolver import filter_pr_info, resolve_pr_status
-from prbot.domain.tracking.value_objects import MessageRef, PRInfo
+from prbot.domain.tracking.value_objects import MessageRef
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +27,7 @@ class HandleIncomingMessage:
         scope_settings: ScopeSettingsPort,
     ) -> None:
         self._sources = sources
-        self._reactions = reactions
+        self._reactions = ReactionManager(reactions)
         self._repo = pr_repository
         self._emoji_resolver = emoji_resolver
         self._user_exclusions = user_exclusions
@@ -65,8 +64,6 @@ class HandleIncomingMessage:
                         mute_self_review_comments=mute,
                     )
                 )
-                emoji = emoji_config.for_status(status)
-                fallback = emoji_config.fallback_for_status(status)
 
                 tracked = TrackedPR(
                     pr_url=pr_url,
@@ -74,27 +71,11 @@ class HandleIncomingMessage:
                     scope_keys=resolved_keys,
                 )
 
-                if emoji is not None:
-                    await self._reactions.add_reaction(message_ref, emoji, fallback)
+                # The review-status emoji and the (independent) CI-failure emoji
+                # are both resolved and applied here; each added emoji is folded
+                # back into the TrackedPR before it is persisted.
+                reactions = self._reactions.plan(emoji_config, status, pr_info, tracked)
+                for emoji in await self._reactions.apply(message_ref, reactions):
                     tracked = tracked.with_added_emoji(emoji)
 
-                # CI failure is an independent check (derived from check-runs, not
-                # reviews), so it may be added alongside the review-status emoji.
-                tracked = await self._apply_ci_emoji(message_ref, tracked, pr_info, emoji_config)
-
                 await self._repo.save(tracked)
-
-    async def _apply_ci_emoji(
-        self,
-        message_ref: MessageRef,
-        tracked: TrackedPR,
-        pr_info: PRInfo,
-        config: EmojiConfig,
-    ) -> TrackedPR:
-        """Add the CI-failure emoji if CI is failing; return the updated TrackedPR."""
-        to_add = ci_emoji_to_add(config, pr_info, tracked)
-        if to_add is None:
-            return tracked
-        emoji, fallback = to_add
-        await self._reactions.add_reaction(message_ref, emoji, fallback)
-        return tracked.with_added_emoji(emoji)
