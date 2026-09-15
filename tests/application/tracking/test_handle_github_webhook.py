@@ -128,6 +128,44 @@ class TestHandleGitHubWebhook:
 
         assert len(reactions.added) == 3
 
+    async def test_webhook_continues_past_unreachable_message(
+        self,
+        repo: FakePRRepository,
+        resolver: FakeEmojiConfigResolver,
+        exclusions: FakeUserExclusionRepo,
+        scope_settings: FakeScopeSettingsRepo,
+    ) -> None:
+        """A deleted message sorted first must not starve the ones after it."""
+        dead = _msg_ref("C0", "dead.0000")
+        alive = _msg_ref("C0", "alive.0000")
+        repo.stored.append(TrackedPR(pr_url=_pr_url(), message_ref=dead))
+        repo.stored.append(TrackedPR(pr_url=_pr_url(), message_ref=alive))
+
+        class ExplodingReactions(FakeReactions):
+            async def add_reaction(
+                self,
+                message_ref: MessageRef,
+                emoji: str,
+                fallback_emoji: str | None = None,
+            ) -> None:
+                if message_ref == dead:
+                    raise RuntimeError("message_not_found")
+                await super().add_reaction(message_ref, emoji, fallback_emoji)
+
+        reactions = ExplodingReactions()
+        merged_info = PRInfo(state="closed", merged=True, reviews=())
+        source = FakePRSource(merged_info)
+        use_case = HandleGitHubWebhook(
+            source, reactions, repo, resolver, exclusions, scope_settings
+        )
+
+        await use_case.execute("o", "r", 1)
+
+        assert [ref for ref, _ in reactions.added] == [alive]
+        by_ref = {t.message_ref: t for t in repo.stored}
+        assert by_ref[alive].applied_emojis == frozenset({"git-merged"})
+        assert by_ref[dead].applied_emojis == frozenset()
+
     async def test_webhook_for_untracked_pr(
         self,
         reactions: FakeReactions,
